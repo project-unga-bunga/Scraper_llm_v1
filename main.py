@@ -1,43 +1,108 @@
 import gc
+import glob
+import os
+import random
+import sys
 import time
 from dataclasses import asdict
 
+import hdbscan
+import matplotlib
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import umap.umap_ as umap
+from bs4 import BeautifulSoup
+from matplotlib import pyplot as plt
 from safetensors import safe_open
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from sklearn.cluster import KMeans
+from sklearn.feature_extraction.text import TfidfVectorizer
 
+from llm_model import LlmScraper
+matplotlib.use('TkAgg')
 model_name = "Bielik-7B-v0.1"
 
 device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-# Note : Manual safetensor dict construction
-# model_tensor = {}
-# for idx in range(1, 4):
-#     safetensor_path = f"{model_name}/model-0000{idx}-of-00003.safetensors"
-#     with safe_open(safetensor_path, framework="pt", device=0) as f:
-#         for k in f.keys():
-#             model_tensor[k] = f.get_tensor(k)
-
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    local_files_only=True,
-    #load_in_8bit=True,
-    torch_dtype=torch.float16,
-    device_map="auto",
-    low_cpu_mem_usage=True,
-)
-model.eval()
-# NOte: Git is pain in the ass
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-# missing_keys, unexpected_keys = model.load_state_dict(model_tensor, strict=False)
-# print("Missing keys:", missing_keys)
-# print("Unexpected keys:", unexpected_keys)
-# del model_tensor
+# NOte: LLM Test prompt gen
+# scraper = LlmScraper(model_name,device)
+# scraper.model.eval()
+# prompt = "Hej, czy możesz ze mną pogadać?"
+# llm_response = scraper.prompt_gen(prompt)
+# print(llm_response)
+# del scraper
 # gc.collect()
-# time.sleep(0.1)
+# time.sleep(1)
+# NOte: LLM Test prompt gen
+# Note: UMAP Prototype
+path = "html"
 
-# model.to(device)
-prompt = "Hej, czy możesz ze mną pogadać?"
-inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
-outputs = model.generate(**inputs, max_new_tokens=30,eos_token_id=tokenizer.eos_token_id)
-print(tokenizer.decode(outputs[0], skip_special_tokens=False))
+def random_file_to_string(directory):
+    files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    if not files:
+        raise FileNotFoundError("No files found in the directory.")
+    random_file = random.choice(files)
+    file_path = os.path.join(directory, random_file)
+    with open(file_path, 'r', encoding='utf-8') as file:
+        return file.read()
+
+html_str = random_file_to_string(path)
+soup = BeautifulSoup(html_str, 'html.parser')
+
+tag_classes = ['a', 'img', 'script', 'div', 'href', 'url']
+elements = []
+present_tags = []
+for tag in tag_classes:
+    found_elements = soup.find_all(tag)
+    if found_elements:
+        present_tags.append(tag)
+        for elem in soup.find_all(tag):
+            elements.append({"tag": tag, "html_code": str(elem)})
+
+tag_classes = present_tags
+
+html_pd = pd.DataFrame(elements)
+vectorizer = TfidfVectorizer(analyzer='word', ngram_range=(3,6))
+X_vectors = vectorizer.fit_transform(html_pd['html_code'])
+
+reducer = umap.UMAP(n_neighbors=10, min_dist=0.1, n_components=2, random_state=42)
+X_embedded = reducer.fit_transform(X_vectors)
+kmeans = KMeans(n_clusters=len(tag_classes), random_state=42)
+clusters = kmeans.fit_predict(X_embedded)
+html_pd['cluster'] = clusters
+
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+sns.scatterplot(
+    ax=axes[0],
+    x=X_embedded[:, 0],
+    y=X_embedded[:, 1],
+    hue=clusters,
+    palette='Spectral',
+    alpha=0.5,
+    s=100
+)
+axes[0].set_title("HTML Code by Clusters")
+axes[0].set_xlabel("UMAP d1")
+axes[0].set_ylabel("UMAP d2")
+axes[0].legend(title='Cluster', bbox_to_anchor=(1, 1))
+axes[0].grid(True)
+
+sns.scatterplot(
+    ax=axes[1],
+    x=X_embedded[:, 0],
+    y=X_embedded[:, 1],
+    hue=html_pd['tag'],
+    palette="Set2",
+    alpha=0.7,
+    s=100
+)
+axes[1].set_title("HTML Code by Tag")
+axes[1].set_xlabel("UMAP d1")
+axes[1].set_ylabel("UMAP d2")
+axes[1].legend(title='HTML Tag', bbox_to_anchor=(1, 1))
+axes[1].grid(True)
+
+plt.tight_layout()
+plt.show()
