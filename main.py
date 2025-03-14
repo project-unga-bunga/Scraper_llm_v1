@@ -26,7 +26,7 @@ model = AutoModelForCausalLM.from_pretrained(
     low_cpu_mem_usage=True,
 )
 model.eval()
-
+# NOte: Git is pain in the ass
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 # missing_keys, unexpected_keys = model.load_state_dict(model_tensor, strict=False)
